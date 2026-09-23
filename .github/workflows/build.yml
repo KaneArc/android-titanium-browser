@@ -19,10 +19,26 @@ permissions:
 jobs:
   build:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'self-hosted' }}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      # Instructs Chromium's compiler framework (GN/ninja) to utilize system ccache wrappers
+      USE_CCACHE: 1
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: true
+      
+      - name: Setup Build Cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-chromium-titanium
+          max-size: 50G
+          create-symlink: true
+
+      - name: Configure Cache Path
+        run: |
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+          mkdir -p ${{ env.CCACHE_DIR }}
       
       - name: Update 
         run: |
