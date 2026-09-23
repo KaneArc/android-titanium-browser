@@ -7,7 +7,7 @@ on:
         description: 'Runner'
         required: true
         type: string
-        default: 'self-hosted' # ubuntu-latest
+        default: 'ubuntu-latest' # Changed default to GitHub runner
   schedule:
     - cron: '0 0 */16 * *'
 
@@ -15,13 +15,13 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+  actions: write # Crucial: Allows the runner to re-trigger itself
 
 jobs:
   build:
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'self-hosted' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'ubuntu-latest' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      # Instructs Chromium's compiler framework (GN/ninja) to utilize system ccache wrappers
       USE_CCACHE: 1
     steps:
       - uses: actions/checkout@v5
@@ -34,6 +34,7 @@ jobs:
           key: ${{ runner.os }}-chromium-titanium
           max-size: 50G
           create-symlink: true
+          append-timestamp: true # Prevents cache corruption on subsequent sequential runs
 
       - name: Configure Cache Path
         run: |
@@ -60,14 +61,36 @@ jobs:
           echo "unix_time=$(date +%s)" >> $GITHUB_ENV
     
       - name: Build
+        id: compile
         env:
             DEBIAN_FRONTEND: noninteractive
             LOCAL_TEST_JKS: ${{ secrets.LOCAL_TEST_JKS }}
             STORE_TEST_JKS: ${{ secrets.STORE_TEST_JKS }}
         run: |
-          ./build.sh
+          # 320 minutes (5.3 hours) cuts the script off right before GitHub's 6-hour limit.
+          # This allows the action to exit cleanly and save your compiled progress.
+          timeout 320m ./build.sh
+          
+          # Detect if it hit the timeout checkpoint
+          if [ $? -eq 124 ]; then
+            echo "CONTINUE_BUILD=true" >> $GITHUB_ENV
+            echo "Build hit checkpoint. Saving cache and restarting..."
+          else
+            echo "CONTINUE_BUILD=false" >> $GITHUB_ENV
+          fi
+
+      # This runs ONLY if the build timed out. It saves the cache and automatically starts a new run.
+      - name: Chain-load Next Run
+        if: env.CONTINUE_BUILD == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Triggering a follow-up run to pick up where we left off..."
+          gh run trigger ${{ github.run_id }}
+          exit 1 # Intentionally fail this run so it stops here and the new one takes over
 
       - name: Set
+        if: env.CONTINUE_BUILD == 'false'
         run: |
           export VERSION=$(find chromium/src/out/release -name '*arm64-v8a.apk' | sed 's/.*\///;s/\-arm64-v8a.apk$//')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
@@ -76,6 +99,7 @@ jobs:
           mv $(find chromium/src/out/release -name '*armeabi-v7a.apk') $VERSION-${{ env.unix_time }}-armeabi-v7a.apk
 
       - name: Publish
+        if: env.CONTINUE_BUILD == 'false'
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -87,6 +111,7 @@ jobs:
             ${{ env.VERSION }}-${{ env.unix_time }}-armeabi-v7a.apk
 
       - name: Attest
+        if: env.CONTINUE_BUILD == 'false'
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
