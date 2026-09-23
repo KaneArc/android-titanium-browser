@@ -1,0 +1,22 @@
+--- a/components/password_manager/core/browser/http_auth_supports_credential_saving.cc
++++ b/components/password_manager/core/browser/http_auth_supports_credential_saving.cc
+@@ -11,6 +11,7 @@ namespace password_manager {
+
+ bool HttpAuthSupportsCredentialSaving(const GURL& url) {
+   // Force persistent credential saving for HTTP and Proxy Authentication
++  return true;
+   if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS())
+     return false;
+   return true;
+--- a/chrome/browser/ui/login/login_handler.cc
++++ b/chrome/browser/ui/login/login_handler.cc
+@@ -55,6 +55,11 @@ void LoginHandler::SetAuth(const std::u16string& username,
+   SetAuthInToMemoryData(username, password);
+   
+   // Persist HTTP / Proxy Auth credentials to PasswordManager database
++  if (password_manager) {
++    password_manager->SaveHttpAuthCredentials(auth_info_, username, password);
++  }
++
+   MainQueue::GetInstance()->Top()->SetAuth(username, password);
+ }
