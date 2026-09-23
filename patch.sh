@@ -136,6 +136,11 @@ sed -i 's/is_desktop_android = !!BUILDFLAG(IS_DESKTOP_ANDROID);/is_desktop_andro
 sed -i 's/is_android_mobile = is_android_any \&\& !is_android_desktop;/is_android_mobile = is_android_any \&\& is_android_desktop;/' components/omnibox/browser/autocomplete_result.cc
 # sed -i 's|OmniboxCapabilities.hasDesktopExperience(context)|true|g' chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/FuseboxSessionState.java
 
+# Save proxy & HTTP authentication credentials persistently
+sed -i 's|bool HttpAuthSupportsCredentialSaving(const GURL& url) {|bool HttpAuthSupportsCredentialSaving(const GURL\& url) { return true;|' components/password_manager/core/browser/http_auth_supports_credential_saving.cc
+sed -i 's|if (auth_info.is_proxy) return false;|if (auth_info.is_proxy) return true;|' components/password_manager/core/browser/http_auth_manager_impl.cc
+sed -i 's|if (auth_info_.is_proxy) {|if (false \&\& auth_info_.is_proxy) {|' chrome/browser/ui/login/login_handler.cc
+
 # desktop: menu
 sed -i 's|if (!IncognitoUtils.shouldOpenIncognitoAsWindow() \|\| is|if (!shouldShowNewIncognitoWindow() \|\| is|' chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
 sed -i 's|if (!separateIncognitoWindow \|\| is|if (!shouldShowNewIncognitoWindow() \|\| is|' chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
