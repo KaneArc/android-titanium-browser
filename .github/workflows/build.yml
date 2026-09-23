@@ -7,7 +7,7 @@ on:
         description: 'Runner'
         required: true
         type: string
-        default: 'ubuntu-latest' # Changed default to GitHub runner
+        default: 'ubuntu-latest'
   schedule:
     - cron: '0 0 */16 * *'
 
@@ -15,7 +15,7 @@ permissions:
   contents: write
   id-token: write
   attestations: write
-  actions: write # Crucial: Allows the runner to re-trigger itself
+  actions: write
 
 jobs:
   build:
@@ -24,7 +24,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       USE_CCACHE: 1
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           submodules: true
       
@@ -34,14 +34,14 @@ jobs:
           key: ${{ runner.os }}-chromium-titanium
           max-size: 70G
           create-symlink: true
-          append-timestamp: true # Prevents cache corruption on subsequent sequential runs
+          append-timestamp: true
 
       - name: Configure Cache Path
         run: |
           echo "/usr/lib/ccache" >> $GITHUB_PATH
           mkdir -p ${{ env.CCACHE_DIR }}
       
-      - name: Update 
+      - name: Update Submodules
         run: |
           cd vanadium
           git fetch --tags
@@ -63,42 +63,40 @@ jobs:
       - name: Build
         id: compile
         env:
-            DEBIAN_FRONTEND: noninteractive
-            LOCAL_TEST_JKS: ${{ secrets.LOCAL_TEST_JKS }}
-            STORE_TEST_JKS: ${{ secrets.STORE_TEST_JKS }}
+          DEBIAN_FRONTEND: noninteractive
+          LOCAL_TEST_JKS: ${{ secrets.LOCAL_TEST_JKS }}
+          STORE_TEST_JKS: ${{ secrets.STORE_TEST_JKS }}
         run: |
-          # 320 minutes (5.3 hours) cuts the script off right before GitHub's 6-hour limit.
-          # This allows the action to exit cleanly and save your compiled progress.
           timeout 320m ./build.sh
           
-          # Detect if it hit the timeout checkpoint
           if [ $? -eq 124 ]; then
             echo "CONTINUE_BUILD=true" >> $GITHUB_ENV
-            echo "Build hit checkpoint. Saving cache and restarting..."
+            echo "Build hit checkpoint timeout. Saving cache and triggering next iteration..."
           else
             echo "CONTINUE_BUILD=false" >> $GITHUB_ENV
           fi
 
-      # This runs ONLY if the build timed out. It saves the cache and automatically starts a new run.
       - name: Chain-load Next Run
         if: env.CONTINUE_BUILD == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Triggering a follow-up run to pick up where we left off..."
+          echo "Triggering follow-up run..."
           gh run trigger ${{ github.run_id }}
-          exit 1 # Intentionally fail this run so it stops here and the new one takes over
+          exit 1
 
-      - name: Set
+      - name: Process Release Artifacts
         if: env.CONTINUE_BUILD == 'false'
         run: |
-          export VERSION=$(find chromium/src/out/release -name '*arm64-v8a.apk' | sed 's/.*\///;s/\-arm64-v8a.apk$//')
+          export TARGET_DIR="chromium/src/out/release"
+          export VERSION=$(find $TARGET_DIR -name '*arm64-v8a.apk' | sed 's/.*\///;s/\-arm64-v8a.apk$//')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          mv $(find chromium/src/out/release -name '*arm64-v8a.aab') $VERSION-${{ env.unix_time }}-arm64-v8a.aab
-          mv $(find chromium/src/out/release -name '*arm64-v8a.apk') $VERSION-${{ env.unix_time }}-arm64-v8a.apk
-          mv $(find chromium/src/out/release -name '*armeabi-v7a.apk') $VERSION-${{ env.unix_time }}-armeabi-v7a.apk
+          
+          mv $TARGET_DIR/$VERSION-arm64-v8a.aab ./$VERSION-${{ env.unix_time }}-arm64-v8a.aab
+          mv $TARGET_DIR/$VERSION-arm64-v8a.apk ./$VERSION-${{ env.unix_time }}-arm64-v8a.apk
+          mv $TARGET_DIR/$VERSION-armeabi-v7a.apk ./$VERSION-${{ env.unix_time }}-armeabi-v7a.apk
 
-      - name: Publish
+      - name: Publish Release
         if: env.CONTINUE_BUILD == 'false'
         uses: softprops/action-gh-release@v2
         with:
@@ -110,7 +108,7 @@ jobs:
             ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.apk
             ${{ env.VERSION }}-${{ env.unix_time }}-armeabi-v7a.apk
 
-      - name: Attest
+      - name: Attest Build Provenance
         if: env.CONTINUE_BUILD == 'false'
         uses: actions/attest-build-provenance@v4
         with:
