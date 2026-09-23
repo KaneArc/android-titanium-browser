@@ -32,7 +32,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ runner.os }}-chromium-titanium
-          max-size: 50G
+          max-size: 70G
           create-symlink: true
           append-timestamp: true # Prevents cache corruption on subsequent sequential runs
 
