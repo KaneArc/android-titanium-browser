@@ -118,6 +118,9 @@ sed -i 's|"platforms": \["win", "mac"\]|"platforms": ["win", "mac", "desktop_and
 # ext: dialog
 sed -i 's|.with(ModalDialogProperties.FILTER_TOUCH_FOR_SECURITY, true)|.with(ModalDialogProperties.FILTER_TOUCH_FOR_SECURITY, false)|' chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java
 
+# ext: proxy auth — forward proxy credential challenges to extensions (e.g. ZeroOmega) on desktop android
+sed -i '/^bool HttpAuthCoordinator::Flow::ForwardToExtension(/,/^}/ s/#if BUILDFLAG(ENABLE_EXTENSIONS)/#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)/' chrome/browser/ui/login/http_auth_coordinator.cc
+
 # ext: locale
 sed -i 's|while (!(locale_path = locales.Next()).empty()) {|&if (locale_path.IsContentUri()) { locale_path = path.Append(locales.GetInfo().GetName()); }|' extensions/common/manifest_handlers/default_locale_handler.cc
 sed -i 's|while (!(locale_folder = locales.Next()).empty()) {|&if (locale_folder.IsContentUri()) { locale_folder = locale_path.Append(locales.GetInfo().GetName()); }|' extensions/common/extension_l10n_util.cc
