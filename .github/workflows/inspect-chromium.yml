@@ -27,7 +27,7 @@ jobs:
           git fetch --depth 1 --filter=blob:none origin \
             "+refs/tags/${{ inputs.version }}:refs/tags/target"
           git ls-tree -r --name-only target \
-            | grep -E '(chrome_http_auth_handler|ChromeHttpAuthHandler\.java|browser/login/LoginPrompt\.java|browser/ui/android/login_handler_android|browser/ui/login/login_handler\.(cc|h))' \
+            | grep -E '(chrome_http_auth_handler|ChromeHttpAuthHandler\.java|/LoginPrompt\.java|browser/ui/android/login_handler_android|browser/ui/login/login_handler\.(cc|h))' \
             | grep -v -E '(unittest|browsertest|javatests|Test\.java)' > ../files.txt
           cat ../files.txt
           xargs -a ../files.txt git checkout target --
@@ -37,14 +37,17 @@ jobs:
         run: |
           f=$(grep 'ChromeHttpAuthHandler.java' ../files.txt | head -1)
           echo "path: $f"
+          [ -n "$f" ] || { echo "not found"; exit 0; }
           grep -v -E '^\s*$|^import ' "$f"
 
       - name: "2. Java LoginPrompt"
         working-directory: src
         run: |
-          f=$(grep 'LoginPrompt.java' ../files.txt | head -1)
-          echo "path: $f"
-          grep -v -E '^\s*$|^import ' "$f"
+          for f in $(grep '/LoginPrompt.java' ../files.txt); do
+            echo "--- $f"
+            grep -v -E '^\s*$|^import ' "$f"
+          done
+          grep -q '/LoginPrompt.java' ../files.txt || echo "LoginPrompt.java not found"
 
       - name: "3. C++ ChromeHttpAuthHandler (.h and .cc)"
         working-directory: src
