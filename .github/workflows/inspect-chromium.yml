@@ -1,8 +1,8 @@
 name: Inspect Chromium source
 
 # Fast (minutes) helper: fetches ONLY the files involved in HTTP/proxy auth
-# for a Chromium tag and prints them. Run it from the Actions tab and paste the
-# log back. Needs to be on the default branch to appear in the Actions tab.
+# for a Chromium tag and prints them, one step per file group.
+# Must be on the default branch to show up in the Actions tab.
 
 on:
   workflow_dispatch:
@@ -27,32 +27,41 @@ jobs:
           git fetch --depth 1 --filter=blob:none origin \
             "+refs/tags/${{ inputs.version }}:refs/tags/target"
           git ls-tree -r --name-only target \
-            | grep -E '(chrome_http_auth_handler|ChromeHttpAuthHandler|/login_handler|http_auth_manager|http_auth_observer|login_model)' \
-            | grep -v -E '(unittest|browsertest|/test)' > ../files.txt
-          echo "Files selected:"; cat ../files.txt
+            | grep -E '(chrome_http_auth_handler|ChromeHttpAuthHandler\.java|browser/login/LoginPrompt\.java|browser/ui/android/login_handler_android|browser/ui/login/login_handler\.(cc|h))' \
+            | grep -v -E '(unittest|browsertest|javatests|Test\.java)' > ../files.txt
+          cat ../files.txt
           xargs -a ../files.txt git checkout target --
 
-      - name: Print the code
+      - name: "1. Java ChromeHttpAuthHandler"
         working-directory: src
         run: |
-          echo "##### A. login_handler.h"
-          cat chrome/browser/ui/login/login_handler.h
+          f=$(grep 'ChromeHttpAuthHandler.java' ../files.txt | head -1)
+          echo "path: $f"
+          grep -v -E '^\s*$|^import ' "$f"
 
-          echo; echo "##### B. login_handler.cc: context around is_proxy"
-          grep -n -B12 -A16 "is_proxy" chrome/browser/ui/login/login_handler.cc
+      - name: "2. Java LoginPrompt"
+        working-directory: src
+        run: |
+          f=$(grep 'LoginPrompt.java' ../files.txt | head -1)
+          echo "path: $f"
+          grep -v -E '^\s*$|^import ' "$f"
 
-          echo; echo "##### C. chrome_http_auth_handler.h"
-          cat chrome/browser/ui/android/chrome_http_auth_handler.h
-
-          echo; echo "##### D. chrome_http_auth_handler.cc"
-          cat chrome/browser/ui/android/chrome_http_auth_handler.cc
-
-          echo; echo "##### E. Java ChromeHttpAuthHandler"
-          J=$(grep 'ChromeHttpAuthHandler.java' ../files.txt | head -1)
-          echo "path: $J"
-          cat "$J"
-
-          echo; echo "##### F. http auth observer/manager headers"
-          for f in $(grep -E 'http_auth_(observer|manager)\.h$' ../files.txt); do
-            echo "--- $f"; cat "$f"
+      - name: "3. C++ ChromeHttpAuthHandler (.h and .cc)"
+        working-directory: src
+        run: |
+          for f in chrome/browser/ui/android/chrome_http_auth_handler.h \
+                   chrome/browser/ui/android/chrome_http_auth_handler.cc; do
+            echo "--- $f"; grep -v -E '^\s*$|^#include|^//' "$f"
           done
+
+      - name: "4. C++ login_handler_android.cc"
+        working-directory: src
+        run: grep -v -E '^\s*$|^#include' chrome/browser/ui/android/login_handler_android.cc
+
+      - name: "5. login_handler.h and is_proxy context"
+        working-directory: src
+        run: |
+          echo "--- login_handler.h"
+          grep -v -E '^\s*$|^#include|^//' chrome/browser/ui/login/login_handler.h
+          echo; echo "--- login_handler.cc around is_proxy"
+          grep -n -B10 -A14 "is_proxy" chrome/browser/ui/login/login_handler.cc
