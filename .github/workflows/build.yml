@@ -1,0 +1,167 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner'
+        required: true
+        type: string
+        default: 'ubuntu-latest'
+      resume:
+        description: 'Internal: set automatically when a checkpoint stage resumes a prior attempt'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 0 */16 * *'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  actions: write   # needed so an incomplete stage can re-trigger this workflow to continue
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 20G
+  CCACHE_SLOPPINESS: time_macros
+  # Leave real headroom under the 6h hard cap for setup, cache save, signing.
+  STAGE_TIMEOUT_MINUTES: 320
+
+jobs:
+  build:
+    # Falls back to ubuntu-latest on the schedule trigger too, since that
+    # trigger has no `inputs` at all.
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 350
+    steps:
+      - name: Free disk space
+        run: |
+          echo "Before:"; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/share/swift || true
+          sudo docker image prune --all --force || true
+          echo "After:"; df -h /
+
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Update vanadium submodule
+        run: |
+          cd vanadium
+          git fetch --tags
+          git checkout $(git tag | sort -V | tail -n1)
+          cd ..
+          git add vanadium
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          if ! git diff --staged --quiet; then
+            git commit -am "update"
+            git push
+          fi
+
+      - name: Set ENV
+        run: |
+          chmod +x *.sh
+          echo "unix_time=$(date +%s)" >> $GITHUB_ENV
+          echo "cache_key=$(grep -m1 -o '[0-9]\+\(\.[0-9]\+\)\{3\}' vanadium/args.gn)" >> $GITHUB_ENV
+
+      # The chromium/src checkout + partial out/Default build is what
+      # actually needs to survive between runs for resumption to mean
+      # anything — this can be tens of GB, so watch your repo's Actions
+      # cache usage; if it gets evicted between runs you lose the checkpoint
+      # and effectively start that stage over.
+      - name: Restore chromium checkout + partial build
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            chromium
+            depot_tools
+          key: chromium-${{ env.cache_key }}-${{ github.run_id }}
+          restore-keys: |
+            chromium-${{ env.cache_key }}-
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.cache_key }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ env.cache_key }}-
+
+      - name: Build (time-boxed)
+        id: build
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          LOCAL_TEST_JKS: ${{ secrets.LOCAL_TEST_JKS }}
+          STORE_TEST_JKS: ${{ secrets.STORE_TEST_JKS }}
+        run: |
+          set +e
+          timeout "${{ env.STAGE_TIMEOUT_MINUTES }}m" ./build.sh
+          status=$?
+          set -e
+          if [ $status -eq 0 ]; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          elif [ $status -eq 124 ]; then
+            echo "Stage timed out before finishing — checkpoint will be saved, resuming on the next run."
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build.sh failed for a real reason (exit $status), not just the timeout."
+            exit $status
+          fi
+
+      # Save checkpoints regardless of outcome, so a timed-out stage still
+      # hands the next run something to resume from.
+      - name: Save chromium checkpoint
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            chromium
+            depot_tools
+          key: chromium-${{ env.cache_key }}-${{ github.run_id }}
+
+      - name: Save ccache checkpoint
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.cache_key }}-${{ github.run_id }}
+
+      - name: Set (rename outputs)
+        if: steps.build.outputs.complete == 'true'
+        run: |
+          export VERSION=$(find chromium/src/out/release -name '*arm64-v8a.apk' | sed 's/.*\///;s/\-arm64-v8a.apk$//')
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          mv $(find chromium/src/out/release -name '*arm64-v8a.aab') $VERSION-${{ env.unix_time }}-arm64-v8a.aab
+          mv $(find chromium/src/out/release -name '*arm64-v8a.apk') $VERSION-${{ env.unix_time }}-arm64-v8a.apk
+
+      - name: Publish
+        if: steps.build.outputs.complete == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: v${{ env.VERSION }}
+          tag_name: v${{ env.VERSION }}
+          files: |
+            ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.aab
+            ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.apk
+
+      - name: Attest
+        if: steps.build.outputs.complete == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.aab
+            ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.apk
+
+      - name: Trigger next checkpoint stage
+        if: steps.build.outputs.complete == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run build.yml \
+            -f runner="${{ github.event.inputs.runner || 'ubuntu-latest' }}" \
+            -f resume=true
