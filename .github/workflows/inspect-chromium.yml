@@ -1,9 +1,8 @@
 name: Inspect Chromium source
 
-# Fast (minutes) helper: fetches ONLY a few source directories of a Chromium tag
-# and prints the code that decides whether proxy credentials get saved.
-# Put this file at .github/workflows/inspect-chromium.yml, then run it from
-# the Actions tab and paste the log output back.
+# Fast (minutes) helper: fetches ONLY the files involved in HTTP/proxy auth
+# for a Chromium tag and prints them. Run it from the Actions tab and paste the
+# log back. Needs to be on the default branch to appear in the Actions tab.
 
 on:
   workflow_dispatch:
@@ -18,49 +17,42 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Sparse partial fetch
+      - name: Fetch only the files we need
         run: |
           set -e
           git init src
           cd src
           git remote add origin https://chromium.googlesource.com/chromium/src.git
           git config extensions.partialClone origin
-          git sparse-checkout init --cone
-          git sparse-checkout set \
-            chrome/browser/ui/login \
-            chrome/browser/ui/android \
-            chrome/browser/password_manager \
-            components/password_manager/core/browser
           git fetch --depth 1 --filter=blob:none origin \
             "+refs/tags/${{ inputs.version }}:refs/tags/target"
-          git checkout target
-          echo "Checked out $(git rev-parse --short HEAD) for ${{ inputs.version }}"
+          git ls-tree -r --name-only target \
+            | grep -E '(chrome_http_auth_handler|ChromeHttpAuthHandler|/login_handler|http_auth_manager|http_auth_observer|login_model)' \
+            | grep -v -E '(unittest|browsertest|/test)' > ../files.txt
+          echo "Files selected:"; cat ../files.txt
+          xargs -a ../files.txt git checkout target --
 
-      - name: Print proxy / credential-saving code
+      - name: Print the code
         working-directory: src
         run: |
-          echo "##### 1. every is_proxy usage"
-          grep -rn "is_proxy" chrome/browser components/password_manager \
-            --include=*.cc --include=*.h --include=*.java | grep -v _unittest | grep -v _browsertest | head -60
+          echo "##### A. login_handler.h"
+          cat chrome/browser/ui/login/login_handler.h
 
-          echo; echo "##### 2. IsSavingAndFillingEnabled / IsFillingEnabled definitions"
-          grep -rn -A20 "::IsSavingAndFillingEnabled(" chrome/browser/password_manager \
-            --include=*.cc | head -120
-          grep -rn -A20 "::IsFillingEnabled(" chrome/browser/password_manager \
-            --include=*.cc | head -120
+          echo; echo "##### B. login_handler.cc: context around is_proxy"
+          grep -n -B12 -A16 "is_proxy" chrome/browser/ui/login/login_handler.cc
 
-          echo; echo "##### 3. Android PromptUserToSaveOrUpdatePassword"
-          grep -rn -A30 "::PromptUserToSaveOrUpdatePassword(" chrome/browser/password_manager \
-            --include=*.cc | head -120
+          echo; echo "##### C. chrome_http_auth_handler.h"
+          cat chrome/browser/ui/android/chrome_http_auth_handler.h
 
-          echo; echo "##### 4. Android login handler + http auth handler"
-          ls chrome/browser/ui/android | grep -i -E "login|http_auth" || true
-          cat chrome/browser/ui/android/login_handler_android.cc 2>/dev/null | head -150
+          echo; echo "##### D. chrome_http_auth_handler.cc"
+          cat chrome/browser/ui/android/chrome_http_auth_handler.cc
 
-          echo; echo "##### 5. who calls HttpAuthManager::OnDidFinishMainFrameNavigation"
-          grep -rn "OnDidFinishMainFrameNavigation\|GetHttpAuthManager" chrome/browser \
-            components/password_manager --include=*.cc --include=*.h | grep -v _unittest | head -40
+          echo; echo "##### E. Java ChromeHttpAuthHandler"
+          J=$(grep 'ChromeHttpAuthHandler.java' ../files.txt | head -1)
+          echo "path: $J"
+          cat "$J"
 
-          echo; echo "##### 6. password_form_manager: http auth save path"
-          grep -n -B2 -A25 "ProvisionallySaveHttpAuthForm" \
-            components/password_manager/core/browser/password_form_manager.cc | head -100
+          echo; echo "##### F. http auth observer/manager headers"
+          for f in $(grep -E 'http_auth_(observer|manager)\.h$' ../files.txt); do
+            echo "--- $f"; cat "$f"
+          done
