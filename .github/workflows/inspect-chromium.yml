@@ -1,7 +1,7 @@
 name: Inspect Chromium source
 
-# Fast (minutes) helper: fetches ONLY the files involved in HTTP/proxy auth
-# for a Chromium tag and prints them, one step per file group.
+# Fast (minutes) helper: fetches only the files that decide whether extensions
+# (e.g. ZeroOmega) get to answer a proxy 407 before the login dialog shows.
 # Must be on the default branch to show up in the Actions tab.
 
 on:
@@ -27,44 +27,40 @@ jobs:
           git fetch --depth 1 --filter=blob:none origin \
             "+refs/tags/${{ inputs.version }}:refs/tags/target"
           git ls-tree -r --name-only target \
-            | grep -E '(chrome_http_auth_handler|ChromeHttpAuthHandler\.java|/LoginPrompt\.java|browser/ui/android/login_handler_android|browser/ui/login/login_handler\.(cc|h))' \
-            | grep -v -E '(unittest|browsertest|javatests|Test\.java)' > ../files.txt
+            | grep -E '^(chrome/browser/ui/login/|extensions/buildflags/|extensions/browser/api/web_request/web_request_api\.(h|cc)$|chrome/browser/chrome_content_browser_client\.cc$)' \
+            | grep -v -E '(unittest|browsertest)' > ../files.txt
           cat ../files.txt
           xargs -a ../files.txt git checkout target --
 
-      - name: "1. Java ChromeHttpAuthHandler"
+      - name: "1. login/BUILD.gn and buildflags.gni"
         working-directory: src
         run: |
-          f=$(grep 'ChromeHttpAuthHandler.java' ../files.txt | head -1)
-          echo "path: $f"
-          [ -n "$f" ] || { echo "not found"; exit 0; }
-          grep -v -E '^\s*$|^import ' "$f"
+          echo "--- chrome/browser/ui/login/BUILD.gn"
+          grep -v -E '^\s*$' chrome/browser/ui/login/BUILD.gn
+          echo; echo "--- extensions/buildflags"
+          for f in $(grep '^extensions/buildflags/' ../files.txt); do echo "## $f"; grep -v -E '^\s*$' "$f"; done
 
-      - name: "2. Java LoginPrompt"
+      - name: "2. http_auth_coordinator.cc"
+        working-directory: src
+        run: grep -v -E '^\s*$' chrome/browser/ui/login/http_auth_coordinator.cc
+
+      - name: "3. extension / android mentions in login_handler.cc and login_tab_helper.cc"
         working-directory: src
         run: |
-          for f in $(grep '/LoginPrompt.java' ../files.txt); do
+          for f in chrome/browser/ui/login/login_handler.cc chrome/browser/ui/login/login_tab_helper.cc; do
             echo "--- $f"
-            grep -v -E '^\s*$|^import ' "$f"
-          done
-          grep -q '/LoginPrompt.java' ../files.txt || echo "LoginPrompt.java not found"
-
-      - name: "3. C++ ChromeHttpAuthHandler (.h and .cc)"
-        working-directory: src
-        run: |
-          for f in chrome/browser/ui/android/chrome_http_auth_handler.h \
-                   chrome/browser/ui/android/chrome_http_auth_handler.cc; do
-            echo "--- $f"; grep -v -E '^\s*$|^#include|^//' "$f"
+            grep -n -B2 -A10 -E 'ENABLE_EXTENSIONS|IS_ANDROID|extensions::|MaybeProxyAuthRequest' "$f" | head -150
           done
 
-      - name: "4. C++ login_handler_android.cc"
-        working-directory: src
-        run: grep -v -E '^\s*$|^#include' chrome/browser/ui/android/login_handler_android.cc
-
-      - name: "5. login_handler.h and is_proxy context"
+      - name: "4. ChromeContentBrowserClient::CreateLoginDelegate"
         working-directory: src
         run: |
-          echo "--- login_handler.h"
-          grep -v -E '^\s*$|^#include|^//' chrome/browser/ui/login/login_handler.h
-          echo; echo "--- login_handler.cc around is_proxy"
-          grep -n -B10 -A14 "is_proxy" chrome/browser/ui/login/login_handler.cc
+          grep -n -B3 -A45 'ChromeContentBrowserClient::CreateLoginDelegate(' \
+            chrome/browser/chrome_content_browser_client.cc | head -120
+
+      - name: "5. WebRequestAPI::MaybeProxyAuthRequest"
+        working-directory: src
+        run: |
+          grep -n -B6 -A6 'MaybeProxyAuthRequest' extensions/browser/api/web_request/web_request_api.h
+          echo "--- definition"
+          grep -n -A40 'WebRequestAPI::MaybeProxyAuthRequest(' extensions/browser/api/web_request/web_request_api.cc | head -80
